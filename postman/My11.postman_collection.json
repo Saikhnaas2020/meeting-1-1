@@ -1,0 +1,334 @@
+{
+  "info": {
+    "name": "My 1:1 API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000"
+    },
+    {
+      "key": "meetingId",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "Login (ажилтан)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/login",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "auth",
+            "login"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"employee@my11.demo\",\n  \"password\": \"Demo!2026\"\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Login (удирдлага)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/login",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "auth",
+            "login"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"manager@my11.demo\",\n  \"password\": \"Demo!2026\"\n}"
+        }
+      }
+    },
+    {
+      "name": "Login (HR)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/login",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "auth",
+            "login"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"hr@my11.demo\",\n  \"password\": \"Demo!2026\"\n}"
+        }
+      }
+    },
+    {
+      "name": "Уулзалтууд",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/meetings",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "meetings"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const m = pm.response.json().meetings;",
+              "if (m && m.length) pm.collectionVariables.set('meetingId', m[0].id);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Шинэ хүсэлт (ажилтан)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/meetings",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "meetings"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"recipient\": \"manager\",\n  \"topics\": [\n    \"Карьер, хөгжил\"\n  ],\n  \"note\": \"Postman тест\",\n  \"date\": \"2026-12-03\",\n  \"time\": \"10:30\",\n  \"backupTime\": \"\",\n  \"mode\": \"Microsoft Teams\",\n  \"requestKey\": \"{{$guid}}\"\n}"
+        }
+      }
+    },
+    {
+      "name": "Нэг уулзалт",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/meetings/{{meetingId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "meetings",
+            "{{meetingId}}"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Батлах (удирдлага)",
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/meetings/{{meetingId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "meetings",
+            "{{meetingId}}"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"action\": \"confirm\"\n}"
+        }
+      }
+    },
+    {
+      "name": "Өөр цаг санал болгох",
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/meetings/{{meetingId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "meetings",
+            "{{meetingId}}"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"action\": \"propose\",\n  \"date\": \"2026-12-04\",\n  \"time\": \"14:00\"\n}"
+        }
+      }
+    },
+    {
+      "name": "Хувийн тэмдэглэл унших",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/meetings/{{meetingId}}/notes",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "meetings",
+            "{{meetingId}}",
+            "notes"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Хувийн тэмдэглэл хадгалах",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/meetings/{{meetingId}}/notes",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "meetings",
+            "{{meetingId}}",
+            "notes"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"content\": \"Зөвхөн надад харагдана\"\n}"
+        }
+      }
+    },
+    {
+      "name": "HR үзүүлэлт",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/metrics",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "metrics"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Мэдэгдлүүд",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/notifications",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "notifications"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Logout",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/logout",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "auth",
+            "logout"
+          ]
+        }
+      }
+    }
+  ]
+}
