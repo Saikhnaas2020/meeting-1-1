@@ -4,7 +4,9 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import {
   ArrowLeft,
   ArrowRight,
+  BarChart3,
   BriefcaseBusiness,
+  CalendarPlus,
   CalendarDays,
   Check,
   CheckCircle2,
@@ -39,8 +41,19 @@ import {
   type SessionUser,
   type Status,
 } from "@/lib/types"
+import { Avatar, api, buildDays, formatDate, newKey, parts, shownTime } from "./shared"
+import {
+  ActionExtractor,
+  EmployeeTips,
+  GuidePanel,
+  HistoryTips,
+  InsightsPage,
+  StartConversation,
+  TeamPage,
+  type StartRequest,
+} from "./Conversations"
 
-type Page = "home" | "meetings"
+type Page = "home" | "meetings" | "team" | "insights"
 type ToastState = { message: string; kind: "ok" | "error" } | null
 
 const TOPICS = [
@@ -72,104 +85,7 @@ const STATUS: Record<Status, string> = {
 const ROLE_LABEL = { employee: "Ажилтан", manager: "Удирдлага", hr: "Хүний нөөц" }
 const ACTIVE: Status[] = ["pending", "proposed", "confirmed"]
 
-// ---------- API ----------
-
-class ApiError extends Error {
-  constructor(
-    public status: number,
-    message: string,
-  ) {
-    super(message)
-  }
-}
-
-async function api<T>(url: string, method = "GET", body?: unknown): Promise<T> {
-  let res: Response
-  try {
-    res = await fetch(url, {
-      method,
-      cache: "no-store",
-      headers: body !== undefined ? { "Content-Type": "application/json" } : undefined,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    })
-  } catch {
-    throw new ApiError(0, "Сүлжээний алдаа. Интернэт холболтоо шалгана уу.")
-  }
-  const data = await res.json().catch(() => ({}))
-  if (res.status === 401) {
-    window.location.reload()
-    throw new ApiError(401, "Нэвтрэх хугацаа дууссан байна.")
-  }
-  if (!res.ok) throw new ApiError(res.status, data.error || "Алдаа гарлаа. Дахин оролдоно уу.")
-  return data as T
-}
-
-// ---------- date helpers ----------
-
-function toDateKey(date: Date) {
-  return date.toISOString().split("T")[0]
-}
-
-function buildDays() {
-  const days = []
-  const labels = ["Ня", "Да", "Мя", "Лх", "Пү", "Ба", "Бя"]
-  const today = new Date()
-  today.setHours(12, 0, 0, 0)
-  for (let i = 1; i <= 7; i++) {
-    const date = new Date(today)
-    date.setDate(today.getDate() + i)
-    days.push({
-      value: toDateKey(date),
-      day: labels[date.getDay()],
-      number: date.getDate(),
-      month: date.getMonth() + 1,
-    })
-  }
-  return days
-}
-
-// Deterministic formatting (same output on server and browser → no hydration mismatch).
-const WEEKDAYS = ["Ням", "Даваа", "Мягмар", "Лхагва", "Пүрэв", "Баасан", "Бямба"]
-
-function parts(date: string) {
-  const [y, m, d] = date.split("-").map(Number)
-  return { month: m, day: d, weekday: WEEKDAYS[new Date(Date.UTC(y, m - 1, d)).getUTCDay()] }
-}
-
-function formatDate(date: string) {
-  const p = parts(date)
-  return `${p.month}-р сарын ${p.day}, ${p.weekday}`
-}
-
-function shownTime(meeting: Meeting) {
-  return meeting.status === "proposed" && meeting.alternateTime ? meeting.alternateTime : meeting.time
-}
-
-function newKey() {
-  return typeof crypto !== "undefined" && "randomUUID" in crypto
-    ? crypto.randomUUID()
-    : "10000000-1000-4000-8000-100000000000".replace(/[018]/g, (c) =>
-        (Number(c) ^ (Math.random() * 16) >> (Number(c) / 4)).toString(16),
-      )
-}
-
 // ---------- small components ----------
-
-function Avatar({
-  initials,
-  size = "md",
-  green = false,
-}: {
-  initials: string
-  size?: "sm" | "md" | "lg"
-  green?: boolean
-}) {
-  return (
-    <span className={`avatar avatar-${size} ${green ? "avatar-green" : ""}`} aria-hidden="true">
-      {initials}
-    </span>
-  )
-}
 
 function StatusBadge({ status }: { status: Status }) {
   return (
@@ -216,6 +132,7 @@ export default function My11App({
   const [toast, setToast] = useState<ToastState>(null)
   const [meetings, setMeetings] = useState<Meeting[]>(initialMeetings)
   const [busyId, setBusyId] = useState<string | null>(null)
+  const [startRequest, setStartRequest] = useState<StartRequest | null>(null)
 
   const notify = useCallback((message: string) => setToast({ message, kind: "ok" }), [])
   const fail = useCallback(
@@ -265,13 +182,20 @@ export default function My11App({
             <EmployeeHome
               firstName={firstName}
               meetings={meetings.filter((m) => m.isMine)}
+              busyId={busyId}
               onRequest={() => setTargetChooserOpen(true)}
               onOpen={(m) => setSelectedId(m.id)}
               onViewAll={() => setPage("meetings")}
+              onConfirm={(id) => changeStatus(id, { action: "confirm" }, "Уулзалтын цаг баталгаажлаа")}
+              onReschedule={(meeting) => setRescheduleMeeting(meeting)}
             />
           ) : (
             <MeetingsPage meetings={meetings.filter((m) => m.isMine)} onOpen={(m) => setSelectedId(m.id)} />
           )
+        ) : page === "team" && role === "manager" ? (
+          <TeamPage onStart={setStartRequest} />
+        ) : page === "insights" && role === "hr" ? (
+          <InsightsPage onStart={setStartRequest} />
         ) : (
           <ManagerHome
             firstName={firstName}
@@ -281,10 +205,22 @@ export default function My11App({
             onOpen={(m) => setSelectedId(m.id)}
             onConfirm={(id) => changeStatus(id, { action: "confirm" }, "Уулзалтын цаг баталгаажлаа")}
             onReschedule={(meeting) => setRescheduleMeeting(meeting)}
+            onStart={() => setStartRequest({})}
           />
         )}
       </main>
-      {role === "employee" && <MobileNav page={page} onPage={setPage} />}
+      <MobileNav role={role} page={page} onPage={setPage} />
+      {startRequest && role !== "employee" && (
+        <StartConversation
+          role={role}
+          initial={startRequest}
+          onClose={() => setStartRequest(null)}
+          onCreated={(meeting) => {
+            upsert(meeting)
+            notify("Урилга илгээгдлээ")
+          }}
+        />
+      )}
       {targetChooserOpen && (
         <RecipientChooser
           hasManager={Boolean(managerName)}
@@ -310,9 +246,12 @@ export default function My11App({
       {selectedMeeting && (
         <MeetingDetails
           meeting={selectedMeeting}
+          meetings={meetings}
           user={user}
           busy={busyId === selectedMeeting.id}
           onClose={() => setSelectedId(null)}
+          onOpenOther={(m) => setSelectedId(m.id)}
+          onReschedule={() => setRescheduleMeeting(selectedMeeting)}
           onStatus={async (body, success) => {
             const ok = await changeStatus(selectedMeeting.id, body, success)
             if (ok && (body.action === "accept" || body.action === "cancel")) setSelectedId(null)
@@ -331,7 +270,7 @@ export default function My11App({
             const ok = await changeStatus(
               rescheduleMeeting.id,
               { action: "propose", date, time },
-              "Шинэ цаг ажилтанд санал болголоо",
+              "Шинэ цаг санал болголоо",
             )
             if (ok) setRescheduleMeeting(null)
           }}
@@ -388,7 +327,20 @@ function Header({
         </nav>
       )}
       {role !== "employee" && (
-        <span className="manager-label">{role === "manager" ? "Удирдлагын хэсэг" : "HR хэсэг"}</span>
+        <nav className="desktop-nav" aria-label="Үндсэн цэс">
+          <button className={page === "home" ? "active" : ""} onClick={() => onPage("home")}>
+            Нүүр
+          </button>
+          {role === "manager" ? (
+            <button className={page === "team" ? "active" : ""} onClick={() => onPage("team")}>
+              Миний баг
+            </button>
+          ) : (
+            <button className={page === "insights" ? "active" : ""} onClick={() => onPage("insights")}>
+              Дүгнэлт
+            </button>
+          )}
+        </nav>
       )}
       <div className="header-actions">
         <div className="role-switcher">
@@ -416,14 +368,20 @@ function Header({
   )
 }
 
-function MobileNav({ page, onPage }: { page: Page; onPage: (page: Page) => void }) {
+function MobileNav({ role, page, onPage }: { role: SessionUser["role"]; page: Page; onPage: (page: Page) => void }) {
+  const second: { page: Page; label: string; icon: React.ReactNode } =
+    role === "employee"
+      ? { page: "meetings", label: "Уулзалтууд", icon: <CalendarDays size={21} /> }
+      : role === "manager"
+        ? { page: "team", label: "Миний баг", icon: <UsersRound size={21} /> }
+        : { page: "insights", label: "Дүгнэлт", icon: <BarChart3 size={21} /> }
   return (
     <nav className="mobile-nav" aria-label="Үндсэн цэс">
       <button className={page === "home" ? "active" : ""} onClick={() => onPage("home")}>
         <Home size={21} /> <span>Нүүр</span>
       </button>
-      <button className={page === "meetings" ? "active" : ""} onClick={() => onPage("meetings")}>
-        <CalendarDays size={21} /> <span>Уулзалтууд</span>
+      <button className={page === second.page ? "active" : ""} onClick={() => onPage(second.page)}>
+        {second.icon} <span>{second.label}</span>
       </button>
     </nav>
   )
@@ -432,17 +390,24 @@ function MobileNav({ page, onPage }: { page: Page; onPage: (page: Page) => void 
 function EmployeeHome({
   firstName,
   meetings,
+  busyId,
   onRequest,
   onOpen,
   onViewAll,
+  onConfirm,
+  onReschedule,
 }: {
   firstName: string
   meetings: Meeting[]
+  busyId: string | null
   onRequest: () => void
   onOpen: (meeting: Meeting) => void
   onViewAll: () => void
+  onConfirm: (id: string) => void
+  onReschedule: (meeting: Meeting) => void
 }) {
-  const upcoming = meetings.find((meeting) => ACTIVE.includes(meeting.status))
+  const invites = meetings.filter((meeting) => meeting.canRespond)
+  const upcoming = meetings.find((meeting) => ACTIVE.includes(meeting.status) && !meeting.canRespond)
   const openTasks = meetings.flatMap((m) => m.followUps.filter((f) => f.ownerIsMe && !f.done).map((f) => ({ ...f, meeting: m })))
   return (
     <div className="content home-content page-enter">
@@ -480,6 +445,31 @@ function EmployeeHome({
         </div>
       </section>
 
+      {invites.length > 0 && (
+        <section className="next-section">
+          <div className="section-heading">
+            <div>
+              <span className="mini-label">ТАНД ИРСЭН</span>
+              <h2>
+                Уулзалтын урилга <em>{invites.length}</em>
+              </h2>
+            </div>
+          </div>
+          <div className="request-grid">
+            {invites.map((meeting) => (
+              <ManagerRequestCard
+                key={meeting.id}
+                meeting={meeting}
+                busy={busyId === meeting.id}
+                onOpen={() => onOpen(meeting)}
+                onConfirm={() => onConfirm(meeting.id)}
+                onReschedule={() => onReschedule(meeting)}
+              />
+            ))}
+          </div>
+        </section>
+      )}
+
       <section className="next-section">
         <div className="section-heading">
           <div>
@@ -504,6 +494,8 @@ function EmployeeHome({
           </div>
         )}
       </section>
+
+      <EmployeeTips meetings={meetings} onOpen={onOpen} />
 
       {openTasks.length > 0 && (
         <section className="next-section">
@@ -551,7 +543,7 @@ function MeetingCard({
       </div>
       <div className="meeting-main">
         <StatusBadge status={meeting.status} />
-        <h3>{meeting.topics.join(", ")}</h3>
+        <h3>{meeting.initiator === "employee" ? meeting.topics.join(", ") : meeting.typeLabel}</h3>
         <div className="meeting-meta">
           <span>
             <Clock3 size={15} /> {formatDate(meeting.date)}, {shownTime(meeting)}
@@ -700,6 +692,7 @@ function ManagerHome({
   onOpen,
   onConfirm,
   onReschedule,
+  onStart,
 }: {
   firstName: string
   meetings: Meeting[]
@@ -708,6 +701,7 @@ function ManagerHome({
   onOpen: (meeting: Meeting) => void
   onConfirm: (id: string) => void
   onReschedule: (meeting: Meeting) => void
+  onStart: () => void
 }) {
   const isHr = view === "hr"
   const requests = meetings.filter((meeting) => ["pending", "proposed"].includes(meeting.status))
@@ -728,13 +722,18 @@ function ManagerHome({
             ? "Ажилтны итгэлтэйгээр хуваалцсан хүсэлтийг нууцлалтайгаар хүлээн аваарай."
             : "Багаараа тайван ярилцах цагийг хамтдаа гаргая."}
         </p>
+        <div>
+          <button className="primary-button" onClick={onStart}>
+            <CalendarPlus size={17} /> {isHr ? "Ярилцлага санаачлах" : "1:1 уулзалт товлох"}
+          </button>
+        </div>
       </section>
       <section className="manager-section">
         <div className="section-heading">
           <div>
             <span className="mini-label">АНХААРАЛ ШААРДАХ</span>
             <h2>
-              Шинэ хүсэлтүүд <em>{requests.length}</em>
+              Хүсэлт ба урилга <em>{requests.filter((m) => m.canRespond).length}</em>
             </h2>
           </div>
         </div>
@@ -821,15 +820,22 @@ function ManagerRequestCard({
   onConfirm: () => void
   onReschedule: () => void
 }) {
-  const waiting = meeting.status === "proposed"
+  const waiting = !meeting.canRespond
+  const other = meeting.isMine
+    ? { name: meeting.manager, initials: meeting.managerInitials }
+    : { name: meeting.employee, initials: meeting.employeeInitials }
+  const note = meeting.initiator === "employee" ? meeting.note : meeting.purpose
   return (
     <article className="request-card">
       <button className="request-main" onClick={onOpen}>
         <div className="request-person">
-          <Avatar initials={meeting.employeeInitials} size="md" />
+          <Avatar initials={other.initials} size="md" green={meeting.isMine} />
           <div>
-            <h3>{meeting.employee}</h3>
-            <p>{meeting.topics.join(", ")}</p>
+            <h3>{other.name}</h3>
+            <p>
+              {meeting.initiator === "employee" ? meeting.topics.join(", ") : meeting.typeLabel}
+              {meeting.initiator !== "employee" && !meeting.isMine ? " · таны урилга" : ""}
+            </p>
           </div>
           <ChevronRight size={17} />
         </div>
@@ -839,12 +845,12 @@ function ManagerRequestCard({
           <i /> <Clock3 size={16} />
           <span>{shownTime(meeting)}</span>
         </div>
-        {meeting.note && <p className="request-note">“{meeting.note}”</p>}
+        {note && <p className="request-note">“{note}”</p>}
       </button>
       <div className="request-actions">
         {waiting ? (
           <p className="waiting-note">
-            <Clock3 size={15} /> Ажилтны хариуг хүлээж байна
+            <Clock3 size={15} /> {meeting.isMine ? "Хариуг хүлээж байна" : "Ажилтны хариуг хүлээж байна"}
           </p>
         ) : (
           <>
@@ -1267,7 +1273,20 @@ function SummaryRow({
 
 // ---------- meeting details ----------
 
-function PrivateNote({ meetingId, onNotify, onError }: { meetingId: string; onNotify: (m: string) => void; onError: (e: unknown) => void }) {
+function PrivateNote({
+  meeting,
+  user,
+  onMeeting,
+  onNotify,
+  onError,
+}: {
+  meeting: Meeting
+  user: SessionUser
+  onMeeting: (m: Meeting) => void
+  onNotify: (m: string) => void
+  onError: (e: unknown) => void
+}) {
+  const meetingId = meeting.id
   const [content, setContent] = useState("")
   const [saved, setSaved] = useState("")
   const [loading, setLoading] = useState(true)
@@ -1317,6 +1336,16 @@ function PrivateNote({ meetingId, onNotify, onError }: { meetingId: string; onNo
         {saving ? <LoaderCircle className="spin" size={15} /> : <Check size={15} />}
         {content === saved && !loading ? "Хадгалсан" : "Хадгалах"}
       </button>
+      {!loading && (
+        <ActionExtractor
+          meeting={meeting}
+          user={user}
+          content={saved}
+          onMeeting={onMeeting}
+          onNotify={onNotify}
+          onError={onError}
+        />
+      )}
     </div>
   )
 }
@@ -1335,7 +1364,7 @@ function FollowUpForm({
   onError: (e: unknown) => void
 }) {
   const [task, setTask] = useState("")
-  const [ownerId, setOwnerId] = useState(meeting.employeeId)
+  const [ownerId, setOwnerId] = useState(meeting.isMine ? user.id : meeting.employeeId)
   const [due, setDue] = useState("")
   const [saving, setSaving] = useState(false)
   const submit = async () => {
@@ -1361,7 +1390,7 @@ function FollowUpForm({
       <input id="fu-task" value={task} maxLength={200} onChange={(e) => setTask(e.target.value)} placeholder="Жишээ: Сургалтын төлөвлөгөө гаргах" />
       <div className="follow-up-row">
         <select id="fu-owner" aria-label="Хариуцагч" value={ownerId} onChange={(e) => setOwnerId(e.target.value)}>
-          <option value={meeting.employeeId}>{meeting.employee}</option>
+          {!meeting.isMine && <option value={meeting.employeeId}>{meeting.employee}</option>}
           <option value={user.id}>{user.name} (би)</option>
         </select>
         <input id="fu-due" aria-label="Дуусах огноо" type="date" value={due} onChange={(e) => setDue(e.target.value)} />
@@ -1449,18 +1478,24 @@ function PulseForm({
 
 function MeetingDetails({
   meeting,
+  meetings,
   user,
   busy,
   onClose,
+  onOpenOther,
+  onReschedule,
   onStatus,
   onMeeting,
   onNotify,
   onError,
 }: {
   meeting: Meeting
+  meetings: Meeting[]
   user: SessionUser
   busy: boolean
   onClose: () => void
+  onOpenOther: (m: Meeting) => void
+  onReschedule: () => void
   onStatus: (body: Record<string, string>, success: string) => void
   onMeeting: (m: Meeting) => void
   onNotify: (m: string) => void
@@ -1508,12 +1543,17 @@ function MeetingDetails({
                 ? meeting.recipientType === "hr"
                   ? "HR зөвлөх"
                   : "Шууд удирдлага"
-                : "Таны хүсэлт илгээсэн ажилтан"}
+                : meeting.initiator === "employee"
+                  ? "Танд хүсэлт илгээсэн ажилтан"
+                  : "Таны урьсан ажилтан"}
             </p>
           </div>
         </div>
         <div className="detail-info">
-          <SummaryRow icon={<MessageSquareText />} label="Ярилцах сэдэв" value={meeting.topics.join(", ")} />
+          <SummaryRow icon={<Sparkles />} label="Уулзалтын төрөл" value={meeting.typeLabel} />
+          {meeting.initiator === "employee" && (
+            <SummaryRow icon={<MessageSquareText />} label="Ярилцах сэдэв" value={meeting.topics.join(", ")} />
+          )}
           <SummaryRow
             icon={<CalendarDays />}
             label="Өдөр, цаг"
@@ -1535,8 +1575,39 @@ function MeetingDetails({
             <p>“{meeting.note}”</p>
           </div>
         )}
+        {(meeting.purpose || meeting.agenda.length > 0) && (
+          <div className="detail-note agenda-note">
+            <small>ЗОРИЛГО БА AGENDA</small>
+            {meeting.purpose && <p>“{meeting.purpose}”</p>}
+            {meeting.agenda.length > 0 && (
+              <ol>
+                {meeting.agenda.map((a) => (
+                  <li key={a}>{a}</li>
+                ))}
+              </ol>
+            )}
+          </div>
+        )}
 
-        {(meeting.followUps.length > 0 || (!mine && ["confirmed", "completed"].includes(meeting.status))) && (
+        {meeting.canRespond && (
+          <div className="detail-actions">
+            <button
+              className="primary-button"
+              disabled={busy}
+              onClick={() => onStatus({ action: "confirm" }, "Уулзалтын цаг баталгаажлаа")}
+            >
+              {busy ? <LoaderCircle className="spin" size={17} /> : <Check size={17} />} Баталгаажуулах
+            </button>
+            <button className="secondary-button" disabled={busy} onClick={onReschedule}>
+              Өөр цаг санал болгох
+            </button>
+          </div>
+        )}
+
+        {ACTIVE.includes(meeting.status) && <GuidePanel meeting={meeting} />}
+        <HistoryTips meeting={meeting} meetings={meetings} onOpen={onOpenOther} />
+
+        {(meeting.followUps.length > 0 || ["confirmed", "completed"].includes(meeting.status)) && (
           <div className="follow-up">
             <span className="mini-label">ХАМТЫН ТОХИРОЛЦОО</span>
             <h3>Тохиролцсон ажлууд</h3>
@@ -1559,7 +1630,7 @@ function MeetingDetails({
                 </p>
               </div>
             ))}
-            {!mine && ["confirmed", "completed"].includes(meeting.status) && (
+            {["confirmed", "completed"].includes(meeting.status) && (
               <FollowUpForm meeting={meeting} user={user} onMeeting={onMeeting} onNotify={onNotify} onError={onError} />
             )}
           </div>
@@ -1574,9 +1645,9 @@ function MeetingDetails({
           </p>
         )}
 
-        <PrivateNote meetingId={meeting.id} onNotify={onNotify} onError={onError} />
+        <PrivateNote meeting={meeting} user={user} onMeeting={onMeeting} onNotify={onNotify} onError={onError} />
 
-        {mine && meeting.status === "proposed" && (
+        {meeting.canAccept && (
           <div className="detail-actions stacked">
             <div className="proposed-callout">
               <Clock3 size={18} />
@@ -1593,15 +1664,6 @@ function MeetingDetails({
               {busy ? <LoaderCircle className="spin" size={17} /> : null} Энэ цагийг зөвшөөрөх <Check size={17} />
             </button>
           </div>
-        )}
-        {!mine && meeting.status === "pending" && (
-          <button
-            className="primary-button wide detail-confirm"
-            disabled={busy}
-            onClick={() => onStatus({ action: "confirm" }, "Уулзалтын цаг баталгаажлаа")}
-          >
-            {busy ? <LoaderCircle className="spin" size={17} /> : <Check size={17} />} Баталгаажуулах
-          </button>
         )}
         {!mine && meeting.status === "confirmed" && (
           <button
@@ -1631,7 +1693,7 @@ function MeetingDetails({
             </div>
           ) : (
             <button className="danger-text" onClick={() => setConfirmCancel(true)}>
-              {mine ? "Хүсэлтийг цуцлах" : "Уулзалтыг цуцлах"}
+              {mine && meeting.initiator === "employee" ? "Хүсэлтийг цуцлах" : "Уулзалтыг цуцлах"}
             </button>
           ))}
       </div>
@@ -1660,7 +1722,7 @@ function RescheduleModal({
           <div>
             <span className="mini-label">ШИНЭ САНАЛ</span>
             <h2>Өөр цаг санал болгох</h2>
-            <p>{meeting.employee}-д тохирох шинэ цаг сонгоорой.</p>
+            <p>{meeting.isMine ? meeting.manager : meeting.employee}-д тохирох шинэ цаг сонгоорой.</p>
           </div>
           <button className="icon-button" onClick={onClose} aria-label="Хаах">
             <X size={20} />

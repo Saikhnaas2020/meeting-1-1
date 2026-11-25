@@ -23,10 +23,22 @@ export type FollowUp = {
   done: boolean
 }
 
+export type Initiator = "employee" | "manager" | "hr"
+
 /** Shape sent to the browser. Never contains private notes. */
 export type Meeting = {
   id: string
+  /** True when the viewer is the employee side of this conversation. */
   isMine: boolean
+  initiator: Initiator
+  /** Viewer can confirm or propose a new time (they did not start it). */
+  canRespond: boolean
+  /** Viewer started it and the other side proposed a new time. */
+  canAccept: boolean
+  type: import("./guides").MeetingType
+  typeLabel: string
+  purpose?: string
+  agenda: string[]
   recipientType: RecipientType
   employee: string
   employeeInitials: string

@@ -59,8 +59,8 @@ async function main() {
     const meeting = async (values: unknown[]) => {
       const r = await db.query(
         `INSERT INTO meetings (requester_id, recipient_type, recipient_id, topics, note, meeting_date,
-                               meeting_time, proposed_time, mode, status)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
+                               meeting_time, proposed_time, mode, status, employee_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$1) RETURNING id`,
         values,
       )
       return r.rows[0].id as string

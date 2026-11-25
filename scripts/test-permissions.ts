@@ -108,8 +108,8 @@ async function main() {
     assert.ok(!JSON.stringify(await svc.getMeeting(manager, meetingId)).includes(SECRET))
   })
 
-  await test("Удирдлага ажил оноох; ажилтан ажил үүсгэх эрхгүй", async () => {
-    await expectError(svc.createFollowUp(employee, meetingId, { task: "Өөртөө", ownerId: employee.id }), 403)
+  await test("Удирдлага ажил оноох; ажилтан бусдад ажил оноох эрхгүй", async () => {
+    await expectError(svc.createFollowUp(employee, meetingId, { task: "Удирдлагад оноох", ownerId: manager.id }), 403)
     await expectError(svc.createFollowUp(manager, meetingId, { task: "Гадны хүнд", ownerId: otherEmployee.id }), 400)
     const m = await svc.createFollowUp(manager, meetingId, { task: "Сургалтын төлөвлөгөө гаргах", ownerId: employee.id, due: svc.todayKey(10) })
     assert.equal(m.followUps.length, 1)
@@ -173,6 +173,74 @@ async function main() {
   await test("Мэдэгдэл (notification) өгөгдлийн санд үүснэ", async () => {
     const list = await svc.listNotifications(manager)
     assert.ok(list.some((n) => n.meeting_id === meetingId))
+  })
+
+  const invite = {
+    type: "career",
+    purpose: "Хөгжлийн төлөвлөгөө ярилцъя",
+    agenda: ["1–3 жилийн зорилго"],
+    date: svc.todayKey(5),
+    time: "10:30",
+    mode: "Биечлэн",
+  }
+
+  await test("Удирдлага багийн ажилтнаа урина → ажилтан батална; удирдлага өөрөө батлах эрхгүй", async () => {
+    const m = await svc.inviteMeeting(manager, { ...invite, employeeId: employee.id, requestKey: crypto.randomUUID() })
+    created.push(m.id)
+    assert.equal(m.initiator, "manager")
+    assert.equal(m.type, "career")
+    assert.ok(!m.isMine && !m.canRespond)
+    await expectError(svc.updateMeetingStatus(manager, m.id, { action: "confirm" }), 403)
+    const seen = await svc.getMeeting(employee, m.id)
+    assert.ok(seen.isMine && seen.canRespond)
+    assert.deepEqual(seen.agenda, invite.agenda)
+    const confirmed = await svc.updateMeetingStatus(employee, m.id, { action: "confirm" })
+    assert.equal(confirmed.status, "confirmed")
+    await expectError(svc.updateMeetingStatus(employee, m.id, { action: "complete" }), 403)
+  })
+
+  await test("Урилгад ажилтан шинэ цаг санал болговол удирдлага хүлээн авна", async () => {
+    const m = await svc.inviteMeeting(manager, { ...invite, type: "general", employeeId: employee.id, requestKey: crypto.randomUUID() })
+    created.push(m.id)
+    await svc.updateMeetingStatus(employee, m.id, { action: "propose", date: svc.todayKey(6), time: "15:30" })
+    await expectError(svc.updateMeetingStatus(employee, m.id, { action: "accept" }), 403)
+    const accepted = await svc.updateMeetingStatus(manager, m.id, { action: "accept" })
+    assert.equal(accepted.status, "confirmed")
+  })
+
+  await test("Урилгын эрх: ажилтан, өөр багийн удирдлага, HR-ын бус төрөл хориотой", async () => {
+    await expectError(svc.inviteMeeting(employee, { ...invite, employeeId: manager.id, requestKey: crypto.randomUUID() }), 403)
+    await expectError(svc.inviteMeeting(otherManager, { ...invite, employeeId: employee.id, requestKey: crypto.randomUUID() }), 403)
+    await expectError(svc.inviteMeeting(manager, { ...invite, type: "onboarding", employeeId: employee.id, requestKey: crypto.randomUUID() }), 400)
+    await expectError(svc.inviteMeeting(manager, { ...invite, agenda: [], employeeId: employee.id, requestKey: crypto.randomUUID() }), 400)
+  })
+
+  await test("HR stay interview санаачилна; удирдлага тэр яриаг харахгүй", async () => {
+    const m = await svc.inviteMeeting(hr, { ...invite, type: "stay_interview", employeeId: employee.id, requestKey: crypto.randomUUID() })
+    created.push(m.id)
+    assert.equal(m.recipientType, "hr")
+    await expectError(svc.getMeeting(manager, m.id), 404)
+    const seen = await svc.getMeeting(employee, m.id)
+    assert.ok(seen.canRespond)
+  })
+
+  await test("Хүмүүсийн жагсаалт: удирдлага зөвхөн багаа, ажилтан хандах эрхгүй", async () => {
+    const team = await svc.listPeople(manager)
+    assert.ok(team.some((p) => p.id === employee.id))
+    assert.ok(!team.some((p) => p.id === otherEmployee.id))
+    await expectError(svc.listPeople(employee), 403)
+  })
+
+  await test("Хэлтэс, хувь хүний дүгнэлт зөвхөн HR-т; тэмдэглэл, сэтгэгдэл орохгүй", async () => {
+    const dept = await svc.getDepartmentInsights(hr)
+    assert.ok(dept.departments.length > 0)
+    const person = await svc.getPersonInsight(hr, employee.id)
+    assert.ok(person.totals.meetings >= 1)
+    const dump = JSON.stringify([dept, person])
+    assert.ok(!dump.includes(SECRET))
+    await expectError(svc.getDepartmentInsights(manager), 403)
+    await expectError(svc.getPersonInsight(manager, employee.id), 403)
+    await expectError(svc.getPersonInsight(employee, employee.id), 403)
   })
 
   console.log(`\nБүгд амжилттай: ${passed} тест`)

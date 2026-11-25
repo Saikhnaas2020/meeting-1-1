@@ -118,3 +118,28 @@ CREATE TABLE IF NOT EXISTS activity_log (
   created_at  timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS activity_log_entity_idx ON activity_log(entity_type, entity_id);
+
+-- ---------- v2: manager / HR initiated conversations ----------
+-- employee_id: the employee the conversation is about (always the "employee side").
+-- initiator:   who started it. The other side confirms or proposes a new time.
+-- meeting_type: drives the conversation guide (questions, feedback structure, tips).
+ALTER TABLE meetings ADD COLUMN IF NOT EXISTS employee_id uuid REFERENCES users(id) ON DELETE CASCADE;
+ALTER TABLE meetings ADD COLUMN IF NOT EXISTS initiator text NOT NULL DEFAULT 'employee'
+  CHECK (initiator IN ('employee', 'manager', 'hr'));
+ALTER TABLE meetings ADD COLUMN IF NOT EXISTS meeting_type text NOT NULL DEFAULT 'general'
+  CHECK (meeting_type IN ('general', 'career', 'performance', 'wellbeing', 'recognition',
+                          'stay_interview', 'onboarding', 'retention', 'support'));
+ALTER TABLE meetings ADD COLUMN IF NOT EXISTS purpose text CHECK (char_length(purpose) <= 300);
+ALTER TABLE meetings ADD COLUMN IF NOT EXISTS agenda text[] NOT NULL DEFAULT '{}'
+  CHECK (cardinality(agenda) <= 10);
+UPDATE meetings SET employee_id = requester_id WHERE employee_id IS NULL;
+ALTER TABLE meetings ALTER COLUMN employee_id SET NOT NULL;
+CREATE INDEX IF NOT EXISTS meetings_employee_idx ON meetings(employee_id);
+-- Older employee requests: derive the guide type from their topics.
+UPDATE meetings SET meeting_type = CASE
+    WHEN 'Карьер, хөгжил' = ANY(topics) THEN 'career'
+    WHEN 'Ажлын гүйцэтгэл' = ANY(topics) THEN 'performance'
+    WHEN 'Ажлын ачаалал' = ANY(topics) OR 'Ажил, амьдралын тэнцвэр' = ANY(topics) THEN 'wellbeing'
+    WHEN 'Халамж, хангамж' = ANY(topics) OR 'Ажлын орчин' = ANY(topics) THEN 'support'
+    ELSE 'general' END
+  WHERE initiator = 'employee' AND meeting_type = 'general';

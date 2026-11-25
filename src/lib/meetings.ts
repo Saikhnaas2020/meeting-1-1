@@ -15,8 +15,10 @@ import {
   TIMES,
   type Meeting,
   type SessionUser,
+  type Initiator,
   type Status,
 } from "./types"
+import { ALL_TYPES, GUIDES, HR_TYPES, MANAGER_TYPES, typeFromTopics, type MeetingType } from "./guides"
 
 // ---------- helpers ----------
 
@@ -49,7 +51,8 @@ const timeSchema = z.enum(TIMES as [string, ...string[]], {
 
 /** SQL condition: may this user see meeting m at all? */
 const ACCESS_SQL = (userParam: string, roleParam: string) => `(
-  m.requester_id = ${userParam}
+  m.employee_id = ${userParam}
+  OR m.requester_id = ${userParam}
   OR (m.recipient_type = 'manager' AND m.recipient_id = ${userParam})
   OR (m.recipient_type = 'hr' AND ${roleParam} = 'hr')
 )`
@@ -57,25 +60,42 @@ const ACCESS_SQL = (userParam: string, roleParam: string) => `(
 type MeetingRow = {
   id: string
   requester_id: string
+  employee_id: string
+  initiator: Initiator
   recipient_type: "manager" | "hr"
   recipient_id: string | null
   status: Status
   proposed_time: string | null
 }
 
-function isRequester(actor: SessionUser, m: MeetingRow) {
-  return m.requester_id === actor.id
+/** The employee the conversation is about. */
+function isEmployeeSide(actor: SessionUser, m: Pick<MeetingRow, "employee_id">) {
+  return m.employee_id === actor.id
 }
 
-function isRecipientSide(actor: SessionUser, m: MeetingRow) {
-  if (m.requester_id === actor.id) return false
+/** The manager (manager channel) or any HR user (HR channel). */
+function isStaffSide(
+  actor: SessionUser,
+  m: Pick<MeetingRow, "employee_id" | "recipient_type" | "recipient_id">,
+) {
+  if (m.employee_id === actor.id) return false
   if (m.recipient_type === "manager") return m.recipient_id === actor.id
   return actor.role === "hr"
 }
 
+/** Side that started the meeting; it accepts proposals. The other side confirms / proposes. */
+function isInitiatorSide(actor: SessionUser, m: MeetingRow) {
+  return m.initiator === "employee" ? isEmployeeSide(actor, m) : isStaffSide(actor, m)
+}
+
+function isInviteeSide(actor: SessionUser, m: MeetingRow) {
+  return m.initiator === "employee" ? isStaffSide(actor, m) : isEmployeeSide(actor, m)
+}
+
 async function lockMeeting(c: PoolClient, actor: SessionUser, meetingId: string) {
   const { rows } = await c.query(
-    `SELECT m.id, m.requester_id, m.recipient_type, m.recipient_id, m.status, m.proposed_time
+    `SELECT m.id, m.requester_id, m.employee_id, m.initiator, m.recipient_type, m.recipient_id,
+            m.status, m.proposed_time
        FROM meetings m
       WHERE m.id = $1 AND ${ACCESS_SQL("$2", "$3")}
       FOR UPDATE`,
@@ -122,7 +142,7 @@ async function notifyOtherSide(
   message: string,
 ) {
   const targets: string[] = []
-  if (m.requester_id !== actor.id) targets.push(m.requester_id)
+  if (!isEmployeeSide(actor, m)) targets.push(m.employee_id)
   else if (m.recipient_id) targets.push(m.recipient_id)
   else {
     const { rows } = await c.query("SELECT id FROM users WHERE role = 'hr' AND id <> $1", [actor.id])
@@ -145,11 +165,12 @@ function formatDue(date: string | null) {
 // ---------- reads ----------
 
 const MEETING_SELECT = `
-  SELECT m.id, m.requester_id, m.recipient_type, m.recipient_id, m.topics, m.note,
+  SELECT m.id, m.requester_id, m.employee_id, m.initiator, m.meeting_type, m.purpose, m.agenda,
+         m.recipient_type, m.recipient_id, m.topics, m.note,
          to_char(m.meeting_date, 'YYYY-MM-DD') AS date_key,
          m.meeting_time, m.backup_time, m.proposed_time, m.duration_minutes,
          m.mode, m.status, m.created_at,
-         r.name AS requester_name, r.initials AS requester_initials,
+         e.name AS requester_name, e.initials AS requester_initials,
          rc.name AS recipient_name, rc.initials AS recipient_initials,
          EXISTS (
            SELECT 1 FROM conversation_pulse p
@@ -164,11 +185,14 @@ const MEETING_SELECT = `
             WHERE a.meeting_id = m.id
          ), '[]'::json) AS follow_ups
     FROM meetings m
-    JOIN users r ON r.id = m.requester_id
+    JOIN users e ON e.id = m.employee_id
     LEFT JOIN users rc ON rc.id = m.recipient_id
    WHERE ${ACCESS_SQL("$1", "$2")}`
 
 type ListRow = MeetingRow & {
+  meeting_type: MeetingType
+  purpose: string | null
+  agenda: string[]
   topics: string[]
   note: string | null
   date_key: string
@@ -194,13 +218,21 @@ type ListRow = MeetingRow & {
 
 function toDto(row: ListRow, actor: SessionUser): Meeting {
   const isHr = row.recipient_type === "hr"
+  const type: MeetingType = ALL_TYPES.includes(row.meeting_type) ? row.meeting_type : "general"
   return {
     id: row.id,
-    isMine: row.requester_id === actor.id,
+    isMine: isEmployeeSide(actor, row),
+    initiator: row.initiator,
+    canRespond: row.status === "pending" && isInviteeSide(actor, row),
+    canAccept: row.status === "proposed" && isInitiatorSide(actor, row),
+    type,
+    typeLabel: GUIDES[type].label,
+    purpose: row.purpose ?? undefined,
+    agenda: row.agenda ?? [],
     recipientType: row.recipient_type,
     employee: row.requester_name,
     employeeInitials: row.requester_initials,
-    employeeId: row.requester_id,
+    employeeId: row.employee_id,
     manager: isHr ? HR_TEAM_NAME : (row.recipient_name ?? "—"),
     managerInitials: isHr ? "HR" : (row.recipient_initials ?? "—"),
     topics: row.topics,
@@ -276,8 +308,9 @@ export async function createMeeting(actor: SessionUser, input: unknown): Promise
   const meetingId = await tx(async (c) => {
     const inserted = await c.query(
       `INSERT INTO meetings (requester_id, recipient_type, recipient_id, topics, note,
-                             meeting_date, meeting_time, backup_time, mode, status, request_key)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', $10)
+                             meeting_date, meeting_time, backup_time, mode, status, request_key,
+                             employee_id, initiator, meeting_type)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', $10, $1, 'employee', $11)
        ON CONFLICT (request_key) DO NOTHING
        RETURNING id`,
       [
@@ -291,6 +324,7 @@ export async function createMeeting(actor: SessionUser, input: unknown): Promise
         data.backupTime || null,
         data.mode === "Биечлэн" ? "in_person" : "teams",
         data.requestKey,
+        typeFromTopics(data.topics),
       ],
     )
     if (!inserted.rows[0]) {
@@ -306,6 +340,8 @@ export async function createMeeting(actor: SessionUser, input: unknown): Promise
     const row: MeetingRow = {
       id,
       requester_id: actor.id,
+      employee_id: actor.id,
+      initiator: "employee",
       recipient_type: data.recipient,
       recipient_id: data.recipient === "manager" ? actor.managerId : null,
       status: "pending",
@@ -339,15 +375,16 @@ export async function updateMeetingStatus(
 
   await tx(async (c) => {
     const m = await lockMeeting(c, actor, id)
-    const recipientSide = isRecipientSide(actor, m)
-    const requester = isRequester(actor, m)
-    const assignHr = m.recipient_type === "hr" && recipientSide ? actor.id : m.recipient_id
+    const invitee = isInviteeSide(actor, m)
+    const initiatorSide = isInitiatorSide(actor, m)
+    const staff = isStaffSide(actor, m)
+    const assignHr = m.recipient_type === "hr" && staff ? actor.id : m.recipient_id
     let next: Status
     let message: string
 
     switch (data.action) {
       case "confirm":
-        if (!recipientSide) throw new AppError(403, "Энэ уулзалтыг батлах эрх танд байхгүй.")
+        if (!invitee) throw new AppError(403, "Энэ уулзалтыг батлах эрх танд байхгүй.")
         if (m.status !== "pending") throw new AppError(409, "Зөвхөн хүлээгдэж буй хүсэлтийг батална.")
         next = "confirmed"
         await c.query(
@@ -358,7 +395,7 @@ export async function updateMeetingStatus(
         break
 
       case "propose":
-        if (!recipientSide) throw new AppError(403, "Шинэ цаг санал болгох эрх танд байхгүй.")
+        if (!invitee) throw new AppError(403, "Шинэ цаг санал болгох эрх танд байхгүй.")
         if (!["pending", "proposed", "confirmed"].includes(m.status)) {
           throw new AppError(409, "Энэ уулзалтын цагийг өөрчлөх боломжгүй.")
         }
@@ -372,7 +409,7 @@ export async function updateMeetingStatus(
         break
 
       case "accept":
-        if (!requester) throw new AppError(403, "Санал болгосон цагийг зөвхөн хүсэлт илгээгч хүлээн авна.")
+        if (!initiatorSide) throw new AppError(403, "Санал болгосон цагийг зөвхөн уулзалт санаачлагч хүлээн авна.")
         if (m.status !== "proposed") throw new AppError(409, "Хүлээн авах шинэ цаг алга.")
         next = "confirmed"
         await c.query(
@@ -384,7 +421,7 @@ export async function updateMeetingStatus(
         break
 
       case "cancel":
-        if (!requester && !recipientSide) throw new AppError(403, "Энэ уулзалтыг цуцлах эрх танд байхгүй.")
+        if (!invitee && !initiatorSide) throw new AppError(403, "Энэ уулзалтыг цуцлах эрх танд байхгүй.")
         if (!["pending", "proposed", "confirmed"].includes(m.status)) {
           throw new AppError(409, "Энэ уулзалтыг цуцлах боломжгүй.")
         }
@@ -394,7 +431,7 @@ export async function updateMeetingStatus(
         break
 
       case "complete":
-        if (!recipientSide) throw new AppError(403, "Уулзалтыг зөвхөн удирдлага эсвэл HR дуусгана.")
+        if (!staff) throw new AppError(403, "Уулзалтыг зөвхөн удирдлага эсвэл HR дуусгана.")
         if (m.status !== "confirmed") throw new AppError(409, "Зөвхөн баталгаажсан уулзалтыг дуусгана.")
         next = "completed"
         await c.query("UPDATE meetings SET status = $2, updated_at = now() WHERE id = $1", [id, next])
@@ -468,13 +505,17 @@ export async function createFollowUp(actor: SessionUser, meetingId: string, inpu
   const data = parse(followUpSchema, input)
   await tx(async (c) => {
     const m = await lockMeeting(c, actor, id)
-    if (!isRecipientSide(actor, m)) {
-      throw new AppError(403, "Тохиролцсон ажлыг удирдлага эсвэл HR нэмнэ.")
+    const staff = isStaffSide(actor, m)
+    if (!staff && !isEmployeeSide(actor, m)) {
+      throw new AppError(403, "Зөвхөн оролцогчид ажил нэмнэ.")
+    }
+    if (!staff && data.ownerId !== actor.id) {
+      throw new AppError(403, "Та зөвхөн өөртөө ажил нэмэх боломжтой.")
     }
     if (!["confirmed", "completed"].includes(m.status)) {
       throw new AppError(409, "Баталгаажсан эсвэл дууссан уулзалтад л ажил нэмнэ.")
     }
-    if (data.ownerId !== m.requester_id && data.ownerId !== actor.id) {
+    if (data.ownerId !== m.employee_id && data.ownerId !== actor.id) {
       throw new AppError(400, "Хариуцагч нь уулзалтын оролцогч байх ёстой.")
     }
     const { rows } = await c.query(
@@ -536,7 +577,7 @@ export async function submitPulse(actor: SessionUser, meetingId: string, input: 
   const data = parse(pulseSchema, input)
   await tx(async (c) => {
     const m = await lockMeeting(c, actor, id)
-    if (!isRequester(actor, m) && !isRecipientSide(actor, m)) {
+    if (!isEmployeeSide(actor, m) && !isStaffSide(actor, m)) {
       throw new AppError(403, "Зөвхөн оролцогчид үнэлгээ өгнө.")
     }
     if (m.status !== "completed") throw new AppError(409, "Уулзалт дууссаны дараа үнэлнэ.")
@@ -613,4 +654,392 @@ export async function listNotifications(actor: SessionUser) {
 
 export async function markNotificationsRead(actor: SessionUser) {
   await query("UPDATE notifications SET read_at = now() WHERE user_id = $1 AND read_at IS NULL", [actor.id])
+}
+
+// ---------- manager / HR initiated conversations ----------
+
+const inviteSchema = z.object({
+  employeeId: idSchema,
+  type: z.enum(ALL_TYPES as [MeetingType, ...MeetingType[]], { error: "Уулзалтын төрлөө сонгоно уу." }),
+  purpose: z
+    .string()
+    .trim()
+    .min(5, { error: "Уулзалтын зорилгыг товч бичнэ үү." })
+    .max(300, { error: "Зорилго 300 тэмдэгтээс хэтэрсэн байна." }),
+  agenda: z
+    .array(z.string().trim().min(2, { error: "Agenda-ийн зүйл хэт богино байна." }).max(160, { error: "Agenda-ийн зүйл 160 тэмдэгтээс хэтэрсэн байна." }))
+    .min(1, { error: "Agenda-д дор хаяж нэг зүйл нэмнэ үү." })
+    .max(10, { error: "Agenda 10-аас олон зүйлтэй байж болохгүй." }),
+  date: dateSchema,
+  time: timeSchema,
+  mode: z.enum(["Биечлэн", "Microsoft Teams"]),
+  requestKey: z.uuid({ error: "Хүсэлтийн түлхүүр буруу байна." }),
+})
+
+/** A manager invites a direct report, or HR invites any non-HR colleague. */
+export async function inviteMeeting(actor: SessionUser, input: unknown): Promise<Meeting> {
+  if (actor.role === "employee") throw new AppError(403, "Уулзалтыг зөвхөн удирдлага эсвэл HR санаачилна.")
+  const data = parse(inviteSchema, input)
+  const allowed = actor.role === "hr" ? HR_TYPES : MANAGER_TYPES
+  if (!allowed.includes(data.type)) throw new AppError(400, "Энэ төрлийн уулзалтыг санаачлах боломжгүй.")
+  if (data.employeeId === actor.id) throw new AppError(400, "Өөртэйгөө уулзалт товлох боломжгүй.")
+
+  const [employee] = await query<{ id: string; manager_id: string | null; role: string; name: string }>(
+    "SELECT id, manager_id, role, name FROM users WHERE id = $1",
+    [data.employeeId],
+  )
+  if (!employee) throw new AppError(404, "Ажилтан олдсонгүй.")
+  if (actor.role === "manager" && employee.manager_id !== actor.id) {
+    throw new AppError(403, "Зөвхөн өөрийн багийн ажилтантай уулзалт товлоно.")
+  }
+  if (actor.role === "hr" && employee.role === "hr") {
+    throw new AppError(400, "HR багийн гишүүнтэй энэ хэсгээс уулзалт товлох боломжгүй.")
+  }
+  const channel = actor.role === "hr" ? "hr" : "manager"
+
+  const meetingId = await tx(async (c) => {
+    const inserted = await c.query(
+      `INSERT INTO meetings (requester_id, recipient_type, recipient_id, topics, meeting_date, meeting_time,
+                             mode, status, request_key, employee_id, initiator, meeting_type, purpose, agenda)
+       VALUES ($1, $2, $1, $3, $4, $5, $6, 'pending', $7, $8, $9, $10, $11, $12)
+       ON CONFLICT (request_key) DO NOTHING
+       RETURNING id`,
+      [
+        actor.id,
+        channel,
+        [GUIDES[data.type].label],
+        data.date,
+        data.time,
+        data.mode === "Биечлэн" ? "in_person" : "teams",
+        data.requestKey,
+        employee.id,
+        actor.role,
+        data.type,
+        data.purpose,
+        [...new Set(data.agenda)],
+      ],
+    )
+    if (!inserted.rows[0]) {
+      const existing = await c.query("SELECT id FROM meetings WHERE request_key = $1 AND requester_id = $2", [
+        data.requestKey,
+        actor.id,
+      ])
+      if (!existing.rows[0]) throw new AppError(409, "Хүсэлтийг давхар илгээх боломжгүй.")
+      return existing.rows[0].id as string
+    }
+    const id = inserted.rows[0].id as string
+    await addHistory(c, id, actor.id, "invited", null, "pending", { type: data.type })
+    await logActivity(c, actor.id, "meeting", id, "invite")
+    await c.query("INSERT INTO notifications (user_id, meeting_id, message) VALUES ($1, $2, $3)", [
+      employee.id,
+      id,
+      `${actor.name} тантай "${GUIDES[data.type].label}" уулзалт хийхийг санал болголоо.`,
+    ])
+    return id
+  })
+  return getMeeting(actor, meetingId)
+}
+
+// ---------- people the actor can start a conversation with ----------
+
+export type Person = {
+  id: string
+  name: string
+  initials: string
+  role: "employee" | "manager" | "hr"
+  department: string | null
+  jobTitle: string | null
+  managerName: string | null
+  lastMeeting: string | null
+  daysSinceLast: number | null
+  upcoming: number
+  openActions: number
+}
+
+export async function listPeople(actor: SessionUser): Promise<Person[]> {
+  if (actor.role === "employee") throw new AppError(403, "Энэ жагсаалтыг зөвхөн удирдлага, HR харна.")
+  // Manager: only meetings on the manager channel with themselves. HR: every meeting (counts only).
+  const scope = actor.role === "manager" ? "AND m.recipient_type = 'manager' AND m.recipient_id = $1" : ""
+  const filter = actor.role === "manager" ? "u.manager_id = $1" : "u.role <> 'hr' AND u.id <> $1"
+  const rows = await query<{
+    id: string
+    name: string
+    initials: string
+    role: Person["role"]
+    department: string | null
+    job_title: string | null
+    manager_name: string | null
+    last_meeting: string | null
+    days_since: number | null
+    upcoming: string
+    open_actions: string
+  }>(
+    `SELECT u.id, u.name, u.initials, u.role, u.department, u.job_title, mg.name AS manager_name,
+            to_char(max(m.meeting_date) FILTER (WHERE m.status = 'completed'), 'YYYY-MM-DD') AS last_meeting,
+            (current_date - max(m.meeting_date) FILTER (WHERE m.status = 'completed'))::int AS days_since,
+            count(m.id) FILTER (WHERE m.status IN ('pending', 'proposed', 'confirmed')) AS upcoming,
+            (SELECT count(*) FROM action_items a JOIN meetings am ON am.id = a.meeting_id
+              WHERE a.owner_id = u.id AND a.status = 'open'
+                ${actor.role === "manager" ? "AND am.recipient_type = 'manager' AND am.recipient_id = $1" : ""}) AS open_actions
+       FROM users u
+       LEFT JOIN users mg ON mg.id = u.manager_id
+       LEFT JOIN meetings m ON m.employee_id = u.id ${scope}
+      WHERE ${filter}
+      GROUP BY u.id, mg.name
+      ORDER BY u.name`,
+    [actor.id],
+  )
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    initials: r.initials,
+    role: r.role,
+    department: r.department,
+    jobTitle: r.job_title,
+    managerName: r.manager_name,
+    lastMeeting: r.last_meeting,
+    daysSinceLast: r.days_since,
+    upcoming: Number(r.upcoming),
+    openActions: Number(r.open_actions),
+  }))
+}
+
+// ---------- HR insights: department + individual summaries ----------
+// Built only from metadata: meeting types/status, topics, action-item counts and
+// pulse aggregates (hidden below MIN_REPORTING). Never private notes or pulse comments.
+
+type DeptRow = {
+  department: string
+  people: string
+  meetings: string
+  completed: string
+  completed_90: string
+  covered_90: string
+  actions_open: string
+  actions_done: string
+  actions_overdue: string
+  pulse_n: string
+  pulse_avg: string | null
+  pulse_yes: string
+}
+
+export async function getDepartmentInsights(actor: SessionUser) {
+  if (actor.role !== "hr") throw new AppError(403, "Дүгнэлтийг зөвхөн HR харна.")
+  const rows = await query<DeptRow>(
+    `WITH emp AS (
+       SELECT id, COALESCE(NULLIF(department, ''), 'Тодорхойгүй') AS department
+         FROM users WHERE role <> 'hr'
+     )
+     SELECT e.department,
+            count(DISTINCT e.id) AS people,
+            count(DISTINCT m.id) AS meetings,
+            count(DISTINCT m.id) FILTER (WHERE m.status = 'completed') AS completed,
+            count(DISTINCT m.id) FILTER (WHERE m.status = 'completed' AND m.meeting_date > current_date - 90) AS completed_90,
+            count(DISTINCT m.employee_id) FILTER (WHERE m.status = 'completed' AND m.meeting_date > current_date - 90) AS covered_90,
+            (SELECT count(*) FROM action_items a JOIN emp e2 ON e2.id = a.owner_id
+              WHERE e2.department = e.department AND a.status = 'open') AS actions_open,
+            (SELECT count(*) FROM action_items a JOIN emp e2 ON e2.id = a.owner_id
+              WHERE e2.department = e.department AND a.status = 'done') AS actions_done,
+            (SELECT count(*) FROM action_items a JOIN emp e2 ON e2.id = a.owner_id
+              WHERE e2.department = e.department AND a.status = 'open' AND a.due_date < current_date) AS actions_overdue,
+            (SELECT count(*) FROM conversation_pulse p JOIN meetings pm ON pm.id = p.meeting_id
+               JOIN emp e3 ON e3.id = pm.employee_id WHERE e3.department = e.department) AS pulse_n,
+            (SELECT avg(p.rating) FROM conversation_pulse p JOIN meetings pm ON pm.id = p.meeting_id
+               JOIN emp e3 ON e3.id = pm.employee_id WHERE e3.department = e.department) AS pulse_avg,
+            (SELECT count(*) FILTER (WHERE p.next_step = 'yes') FROM conversation_pulse p JOIN meetings pm ON pm.id = p.meeting_id
+               JOIN emp e3 ON e3.id = pm.employee_id WHERE e3.department = e.department) AS pulse_yes
+       FROM emp e
+       LEFT JOIN meetings m ON m.employee_id = e.id
+      GROUP BY e.department
+      ORDER BY e.department`,
+  )
+  const types = await query<{ department: string; meeting_type: MeetingType; n: string }>(
+    `SELECT COALESCE(NULLIF(u.department, ''), 'Тодорхойгүй') AS department, m.meeting_type, count(*) AS n
+       FROM meetings m JOIN users u ON u.id = m.employee_id
+      WHERE u.role <> 'hr'
+      GROUP BY 1, 2`,
+  )
+  const topics = await query<{ department: string; topic: string; n: string }>(
+    `SELECT COALESCE(NULLIF(u.department, ''), 'Тодорхойгүй') AS department, t.topic, count(*) AS n
+       FROM meetings m JOIN users u ON u.id = m.employee_id, unnest(m.topics) AS t(topic)
+      WHERE u.role <> 'hr' AND m.initiator = 'employee'
+      GROUP BY 1, 2 ORDER BY n DESC`,
+  )
+
+  const departments = rows.map((r) => {
+    const pulseN = Number(r.pulse_n)
+    const hidden = pulseN < MIN_REPORTING
+    const people = Number(r.people)
+    const byType = types
+      .filter((t) => t.department === r.department)
+      .map((t) => ({ type: t.meeting_type, label: GUIDES[t.meeting_type]?.label ?? t.meeting_type, count: Number(t.n) }))
+      .sort((a, b) => b.count - a.count)
+    const topTopics = topics
+      .filter((t) => t.department === r.department)
+      .slice(0, 3)
+      .map((t) => t.topic)
+    const coverage = people ? Math.round((Number(r.covered_90) / people) * 100) : 0
+    const d = {
+      department: r.department,
+      people,
+      meetings: Number(r.meetings),
+      completed: Number(r.completed),
+      completed90: Number(r.completed_90),
+      coverage90: coverage,
+      actionsOpen: Number(r.actions_open),
+      actionsDone: Number(r.actions_done),
+      actionsOverdue: Number(r.actions_overdue),
+      pulse: {
+        responses: pulseN,
+        hidden,
+        avgRating: hidden || r.pulse_avg === null ? null : Math.round(Number(r.pulse_avg) * 10) / 10,
+        clearNextStepPct: hidden ? null : Math.round((Number(r.pulse_yes) / pulseN) * 100),
+      },
+      byType,
+      topTopics,
+    }
+    return { ...d, summary: summarizeDepartment(d) }
+  })
+  return { departments, minReporting: MIN_REPORTING }
+}
+
+function summarizeDepartment(d: {
+  department: string
+  people: number
+  completed90: number
+  coverage90: number
+  actionsOpen: number
+  actionsDone: number
+  actionsOverdue: number
+  pulse: { hidden: boolean; avgRating: number | null }
+  byType: { label: string; count: number }[]
+  topTopics: string[]
+}) {
+  const lines: string[] = []
+  lines.push(
+    `${d.department}: ${d.people} ажилтнаас сүүлийн 90 хоногт ${d.coverage90}% нь дор хаяж нэг 1:1 уулзалт хийсэн (${d.completed90} уулзалт).`,
+  )
+  if (d.topTopics.length) lines.push(`Ажилтнууд хамгийн их ярихыг хүссэн сэдэв: ${d.topTopics.join(", ")}.`)
+  if (d.byType.length) lines.push(`Гол төрөл: ${d.byType.slice(0, 3).map((t) => `${t.label} (${t.count})`).join(", ")}.`)
+  const total = d.actionsOpen + d.actionsDone
+  if (total) {
+    lines.push(
+      `Тохиролцсон ${total} ажлаас ${d.actionsDone} нь дууссан${d.actionsOverdue ? `, ${d.actionsOverdue} нь хугацаа хэтэрсэн` : ""}.`,
+    )
+  }
+  if (!d.pulse.hidden && d.pulse.avgRating !== null) lines.push(`Уулзалтын үр өгөөжийн дундаж: ${d.pulse.avgRating}/5.`)
+  const recs: string[] = []
+  if (d.coverage90 < 70) recs.push("1:1 хамрагдалт бага байна. Удирдлагуудад тогтмол уулзалт товлохыг сануулаарай.")
+  if (d.actionsOverdue > 0) recs.push("Хугацаа хэтэрсэн тохиролцоог дараагийн уулзалтаар эргэн харах хэрэгтэй.")
+  if (!d.byType.some((t) => t.label === GUIDES.career.label)) recs.push("Карьерын яриа хийгдээгүй байна.")
+  if (d.pulse.avgRating !== null && d.pulse.avgRating < 3.5) recs.push("Үр өгөөж доогуур. Удирдлагуудад ярилцлагын хөтчийг ашиглахыг зөвлөөрэй.")
+  return { lines, recommendations: recs }
+}
+
+export async function getPersonInsight(actor: SessionUser, personId: string) {
+  if (actor.role !== "hr") throw new AppError(403, "Хувь хүний дүгнэлтийг зөвхөн HR харна.")
+  const id = parse(idSchema, personId)
+  const [person] = await query<{
+    id: string
+    name: string
+    initials: string
+    department: string | null
+    job_title: string | null
+    manager_name: string | null
+    created_at: Date
+  }>(
+    `SELECT u.id, u.name, u.initials, u.department, u.job_title, mg.name AS manager_name, u.created_at
+       FROM users u LEFT JOIN users mg ON mg.id = u.manager_id
+      WHERE u.id = $1 AND u.role <> 'hr'`,
+    [id],
+  )
+  if (!person) throw new AppError(404, "Ажилтан олдсонгүй.")
+
+  const meetings = await query<{
+    meeting_type: MeetingType
+    status: Status
+    recipient_type: "manager" | "hr"
+    initiator: Initiator
+    date_key: string
+    topics: string[]
+  }>(
+    `SELECT meeting_type, status, recipient_type, initiator, to_char(meeting_date, 'YYYY-MM-DD') AS date_key, topics
+       FROM meetings WHERE employee_id = $1 ORDER BY meeting_date DESC`,
+    [id],
+  )
+  const [actions] = await query<{ open: string; done: string; overdue: string }>(
+    `SELECT count(*) FILTER (WHERE status = 'open') AS open,
+            count(*) FILTER (WHERE status = 'done') AS done,
+            count(*) FILTER (WHERE status = 'open' AND due_date < current_date) AS overdue
+       FROM action_items WHERE owner_id = $1`,
+    [id],
+  )
+
+  const completed = meetings.filter((m) => m.status === "completed")
+  const today = todayKey(0)
+  const daysBetween = (a: string, b: string) => Math.round((Date.parse(b) - Date.parse(a)) / 86_400_000)
+  const last = completed[0]?.date_key ?? null
+  const daysSinceLast = last ? daysBetween(last, today) : null
+  const lastOf = (type: MeetingType) => completed.find((m) => m.meeting_type === type)?.date_key ?? null
+  const lastCareer = lastOf("career")
+  const lastStay = lastOf("stay_interview")
+  const byType = ALL_TYPES.map((t) => ({
+    type: t,
+    label: GUIDES[t].label,
+    count: completed.filter((m) => m.meeting_type === t).length,
+  })).filter((t) => t.count > 0)
+  const topicCounts = new Map<string, number>()
+  for (const m of meetings.filter((x) => x.initiator === "employee")) {
+    for (const t of m.topics) topicCounts.set(t, (topicCounts.get(t) ?? 0) + 1)
+  }
+  const topTopics = [...topicCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4).map(([t]) => t)
+  const tenureDays = daysBetween(new Date(person.created_at).toISOString().slice(0, 10), today)
+
+  const signals: { level: "ok" | "warn"; text: string }[] = []
+  if (daysSinceLast === null) signals.push({ level: "warn", text: "Одоогоор дууссан 1:1 уулзалт алга." })
+  else if (daysSinceLast > 45) signals.push({ level: "warn", text: `Сүүлийн 1:1 уулзалтаас хойш ${daysSinceLast} хоног өнгөрсөн.` })
+  else signals.push({ level: "ok", text: `Сүүлийн 1:1 уулзалт ${daysSinceLast} хоногийн өмнө болсон.` })
+  if (!lastCareer || daysBetween(lastCareer, today) > 180) {
+    signals.push({ level: "warn", text: "Сүүлийн 6 сард карьерын яриа хийгээгүй." })
+  }
+  if (!lastStay && tenureDays > 180) signals.push({ level: "warn", text: "Stay interview хийгдээгүй." })
+  if (Number(actions.overdue) > 0) {
+    signals.push({ level: "warn", text: `${actions.overdue} тохиролцсон ажлын хугацаа хэтэрсэн.` })
+  }
+  if (meetings.filter((m) => m.initiator === "employee" && m.recipient_type === "hr").length >= 2) {
+    signals.push({ level: "warn", text: "HR-тай олон удаа уулзах хүсэлт гаргасан. Дэмжлэг хэрэгтэй эсэхийг анхаараарай." })
+  }
+
+  const suggested: MeetingType[] = []
+  if (tenureDays < 100 && !lastOf("onboarding")) suggested.push("onboarding")
+  if (!lastCareer || daysBetween(lastCareer, today) > 180) suggested.push("career")
+  if (!lastStay && tenureDays > 180) suggested.push("stay_interview")
+  if (!suggested.length) suggested.push("wellbeing")
+
+  return {
+    person: {
+      id: person.id,
+      name: person.name,
+      initials: person.initials,
+      department: person.department,
+      jobTitle: person.job_title,
+      managerName: person.manager_name,
+    },
+    totals: {
+      meetings: meetings.length,
+      completed: completed.length,
+      withManager: completed.filter((m) => m.recipient_type === "manager").length,
+      withHr: completed.filter((m) => m.recipient_type === "hr").length,
+      upcoming: meetings.filter((m) => ["pending", "proposed", "confirmed"].includes(m.status)).length,
+    },
+    lastMeeting: last,
+    daysSinceLast,
+    lastCareer,
+    lastStay,
+    byType,
+    topTopics,
+    actions: { open: Number(actions.open), done: Number(actions.done), overdue: Number(actions.overdue) },
+    signals,
+    suggested: suggested.map((t) => ({ type: t, label: GUIDES[t].label })),
+  }
 }
