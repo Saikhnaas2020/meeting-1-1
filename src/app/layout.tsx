@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from "next"
 import "./styles.css"
 
 export const metadata: Metadata = {
-  title: "My 2:2",
+  title: "My 1:1",
   description: "Ажилтан, удирдлага, HR-ын 1:1 уулзалтын апп",
 }
 

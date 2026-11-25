@@ -375,7 +375,7 @@ function Header({
         <span className="brand-mark">
           <MessageCircleHeart size={20} strokeWidth={2.3} />
         </span>
-        <span>My 2:2</span>
+        <span>My 1:1</span>
       </a>
       {role === "employee" && (
         <nav className="desktop-nav" aria-label="Үндсэн цэс">

@@ -42,7 +42,7 @@ export default function AuthScreen({ showDemo }: { showDemo: boolean }) {
           <span className="brand-mark">
             <MessageCircleHeart size={20} strokeWidth={2.3} />
           </span>
-          <span>My 2:2</span>
+          <span>My 1:1</span>
         </span>
         <h1>Тавтай морил</h1>
         <p className="auth-sub">Ажлын и-мэйл хаягаараа нэвтэрнэ үү.</p>
