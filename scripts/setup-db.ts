@@ -28,6 +28,20 @@ async function main() {
     await db.query(fs.readFileSync(path.join(process.cwd(), "db/schema.sql"), "utf8"))
     console.log("Schema бэлэн.")
 
+    // Keep the three demo accounts' display names current on existing databases.
+    const demoNames: [string, string, string, string][] = [
+      ["employee@my11.demo", "А. Эрдэнэсайхан", "АЭ", "А. Энхжин"],
+      ["manager@my11.demo", "Б. Азжаргал", "БА", "Б. Болд"],
+      ["hr@my11.demo", "Ч. Түвшинзаяа", "ЧТ", "С. Сарантуяа"],
+    ]
+    for (const [email, name, initials, oldName] of demoNames) {
+      const res = await db.query(
+        "UPDATE users SET name = $2, initials = $3 WHERE email = $1 AND name = $4",
+        [email, name, initials, oldName],
+      )
+      if (res.rowCount) console.log(`Демо нэр шинэчлэгдлээ: ${oldName} → ${name}`)
+    }
+
     const { rows } = await db.query("SELECT count(*)::int AS n FROM users")
     if (rows[0].n > 0) {
       console.log("Хэрэглэгч аль хэдийн байна — seed алгаслаа.")
@@ -47,11 +61,11 @@ async function main() {
       return r.rows[0].id as string
     }
 
-    // All people below are fictional.
-    const bold = await add("Б. Болд", "ББ", "manager@my11.demo", "manager", "Борлуулалт", "Багийн ахлагч", null)
+    // Demo accounts (names set by the HR team for testing).
+    const bold = await add("Б. Азжаргал", "БА", "manager@my11.demo", "manager", "Борлуулалт", "Багийн ахлагч", null)
     const ganzo = await add("Г. Ганзориг", "ГГ", "manager2@my11.demo", "manager", "Сүлжээ", "Хэлтсийн дарга", null)
-    const hr = await add("С. Сарантуяа", "СС", "hr@my11.demo", "hr", "Хүний нөөц", "HR бизнес түнш", null)
-    const enkh = await add("А. Энхжин", "АЭ", "employee@my11.demo", "employee", "Борлуулалт", "Борлуулалтын мэргэжилтэн", bold)
+    const hr = await add("Ч. Түвшинзаяа", "ЧТ", "hr@my11.demo", "hr", "Хүний нөөц", "HR бизнес түнш", null)
+    const enkh = await add("А. Эрдэнэсайхан", "АЭ", "employee@my11.demo", "employee", "Борлуулалт", "Борлуулалтын мэргэжилтэн", bold)
     const temuulen = await add("Д. Тэмүүлэн", "ДТ", "employee2@my11.demo", "employee", "Борлуулалт", "Account менежер", bold)
     const nomin = await add("Н. Номин", "НН", "employee3@my11.demo", "employee", "Сүлжээ", "Сүлжээний инженер", ganzo)
     void hr
@@ -85,8 +99,8 @@ async function main() {
     )
     await db.query(
       "INSERT INTO private_notes (meeting_id, author_id, content) VALUES ($1, $2, $3), ($1, $4, $5)",
-      [past, enkh, "(Энхжиний хувийн тэмдэглэл) Дараагийн удаа сургалтын төсвийн талаар асуух.",
-        bold, "(Болдын хувийн тэмдэглэл) Энхжинд ахлах үүрэг санал болгох талаар бодох."],
+      [past, enkh, "(Эрдэнэсайханы хувийн тэмдэглэл) Дараагийн удаа сургалтын төсвийн талаар асуух.",
+        bold, "(Азжаргалын хувийн тэмдэглэл) Эрдэнэсайханд ахлах үүрэг санал болгох талаар бодох."],
     )
     console.log("Демо өгөгдөл нэмэгдлээ. Нууц үг:", process.env.SEED_PASSWORD || "Demo!2026")
   } finally {

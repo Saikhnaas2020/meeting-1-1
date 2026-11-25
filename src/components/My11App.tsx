@@ -417,7 +417,7 @@ function EmployeeHome({
         </p>
         <h1>
           Өнөөдөр юуны тухай
-          <br className="desktop-break" /> ярилцмаар байна?
+          <br className="desktop-break" /> <span className="outline-text">ярилцмаар байна?</span>
         </h1>
       </section>
 
@@ -715,7 +715,7 @@ function ManagerHome({
         </p>
         <h1>
           {isHr ? "HR-тэй ярилцах" : "Тантай ярилцах"}
-          <br className="desktop-break" /> хүсэлтүүд
+          <br className="desktop-break" /> <span className="outline-text">хүсэлтүүд</span>
         </h1>
         <p>
           {isHr

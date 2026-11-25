@@ -656,7 +656,9 @@ export function TeamPage({ onStart }: { onStart: (r: StartRequest) => void }) {
     <div className="content page-enter">
       <section className="page-title">
         <span className="mini-label">МИНИЙ БАГ</span>
-        <h1>Багийн 1:1 хэмнэл</h1>
+        <h1>
+          Багийн <span className="outline-text">1:1 хэмнэл</span>
+        </h1>
         <p>Хэнтэй удаан ярилцаагүйг харж, дараагийн уулзалтаа санаачлаарай.</p>
       </section>
       {error ? (
@@ -753,7 +755,9 @@ export function InsightsPage({ onStart }: { onStart: (r: StartRequest) => void }
     <div className="content page-enter">
       <section className="page-title">
         <span className="mini-label">HR ДҮГНЭЛТ</span>
-        <h1>Ярилцлагын дүгнэлт</h1>
+        <h1>
+          Ярилцлагын <span className="outline-text">дүгнэлт</span>
+        </h1>
         <p>Хэлтэс болон ажилтан бүрийн 1:1 хэмнэл, тохиролцооны биелэлт, үр өгөөж.</p>
       </section>
       <div className="segmented" role="tablist">
