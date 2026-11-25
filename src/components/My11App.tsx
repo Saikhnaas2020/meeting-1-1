@@ -876,8 +876,7 @@ function RecipientChooser({
         <div className="modal-header">
           <div>
             <span className="mini-label">ШИНЭ УУЛЗАЛТ</span>
-            <h2>Хэнтэй уулзах вэ?</h2>
-            <p>Ярилцахад хамгийн тохирох хүнээ сонгоорой.</p>
+            <h2>Хэнтэй уулзах хүсэлтэй байгаа вэ?</h2>
           </div>
           <button className="icon-button" onClick={onClose} aria-label="Хаах">
             <X size={20} />
@@ -903,7 +902,7 @@ function RecipientChooser({
               <ShieldCheck size={23} />
             </span>
             <span className="recipient-option-copy">
-              <strong>HR-тэй уулзах</strong>
+              <strong>HR-тайгаа уулзах</strong>
               <small>Ажлын орчин, халамж болон хувийн хүсэлтээ нууцлалтай хуваалцах</small>
             </span>
             <ChevronRight size={19} />
