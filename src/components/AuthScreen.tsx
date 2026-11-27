@@ -43,7 +43,7 @@ export default function AuthScreen({ showDemo }: { showDemo: boolean }) {
           <span className="brand-mark">
             <MessageCircleHeart size={30} strokeWidth={2.2} />
           </span>
-          <span>My 1:1</span>
+          <span>My 1:1 Meeting</span>
         </span>
         <div className="auth-tagline">
           <h1>Ярилцах зүйл байна уу?</h1>
@@ -95,8 +95,8 @@ export default function AuthScreen({ showDemo }: { showDemo: boolean }) {
           <span>Дараагийн алхам тодорхой</span>
         </div>
         <div className="glass-tile three">
-          <small>Stay interview</small>
-          <strong>Юу таныг энд байлгадаг вэ?</strong>
+          <strong>Let&apos;s Make Time to Talk?</strong>
+          <span>Anytime, Let&apos;s Talk 🙂</span>
         </div>
       </div>
       </div>
