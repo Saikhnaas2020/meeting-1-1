@@ -713,10 +713,7 @@ function ManagerHome({
         <p className="eyebrow">
           Сайн уу, {firstName} <span>👋</span>
         </p>
-        <h1>
-          {isHr ? "HR-тэй ярилцах" : "Тантай ярилцах"}
-          <br className="desktop-break" /> <span className="outline-text">хүсэлтүүд</span>
-        </h1>
+        <h1>Connect Space</h1>
         <p>
           {isHr
             ? "Ажилтны итгэлтэйгээр хуваалцсан хүсэлтийг нууцлалтайгаар хүлээн аваарай."
