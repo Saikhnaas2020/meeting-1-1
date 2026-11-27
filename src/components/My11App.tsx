@@ -417,7 +417,7 @@ function EmployeeHome({
         </p>
         <h1>
           Өнөөдөр юуны тухай
-          <br className="desktop-break" /> <span className="outline-text">ярилцмаар байна?</span>
+          <br className="desktop-break" /> ярилцмаар байна?
         </h1>
       </section>
 
@@ -909,7 +909,7 @@ function RecipientChooser({
             </span>
             <span className="recipient-option-copy">
               <strong>HR-тайгаа уулзах</strong>
-              <small>Ажлын орчин, халамж болон хувийн хүсэлтээ нууцлалтай хуваалцах</small>
+              <small>Ажлын орчин, сэтгэл ханамж, карьер хөгжил, санал хүсэлтээ ярилцах</small>
             </span>
             <ChevronRight size={19} />
           </button>
@@ -1020,15 +1020,6 @@ function RequestWizard({
                     title="Юуны талаар ярилцах вэ?"
                     subtitle={isHr ? "HR багтай ярилцах сэдвээ сонгоорой." : "Ярилцах сэдвээ сонгоорой."}
                   />
-                  {isHr && (
-                    <div className="hr-privacy-banner">
-                      <ShieldCheck size={18} />
-                      <p>
-                        <strong>Таны яриа нууцлалтай</strong>
-                        Дэлгэрэнгүй мэдээлэл бичих албагүй. Зөвхөн уулзалтад оролцогчид таны тайлбарыг харна.
-                      </p>
-                    </div>
-                  )}
                   <div className="topic-grid">
                     {topicOptions.map(({ label, icon: Icon }) => {
                       const selected = topics.includes(label)
@@ -1055,7 +1046,7 @@ function RequestWizard({
                   </div>
                   <div className="optional-field">
                     <button onClick={() => setNoteOpen(!noteOpen)} aria-expanded={noteOpen}>
-                      <span>Нэмж хэлэх зүйл байна уу?</span>
+                      <span>Дэлгэрэнгүй</span>
                       <small>Заавал биш</small>
                       <ChevronDown size={17} className={noteOpen ? "rotate" : ""} />
                     </button>
@@ -1085,7 +1076,7 @@ function RequestWizard({
                     <Avatar initials={isHr ? "HR" : managerName.slice(0, 1)} size="md" green />
                     <div>
                       <h3>{recipientName}</h3>
-                      <p>{isHr ? "HR зөвлөх" : "Шууд удирдлага"}</p>
+                      {!isHr && <p>Шууд удирдлага</p>}
                     </div>
                     <span>
                       <Check size={14} /> Автоматаар сонгогдсон
@@ -1178,7 +1169,7 @@ function RequestWizard({
                     <div className="privacy-note">
                       <MessageCircleHeart size={17} />
                       <p>
-                        <strong>Таны нэмсэн тайлбар</strong>
+                        <strong>Дэлгэрэнгүй</strong>
                         {note}
                       </p>
                     </div>
@@ -1538,15 +1529,15 @@ function MeetingDetails({
           <div>
             <small>{mine ? "УУЛЗАХ ХҮН" : "АЖИЛТАН"}</small>
             <h3>{mine ? meeting.manager : meeting.employee}</h3>
-            <p>
-              {mine
-                ? meeting.recipientType === "hr"
-                  ? "HR зөвлөх"
-                  : "Шууд удирдлага"
-                : meeting.initiator === "employee"
-                  ? "Танд хүсэлт илгээсэн ажилтан"
-                  : "Таны урьсан ажилтан"}
-            </p>
+            {!(mine && meeting.recipientType === "hr") && (
+              <p>
+                {mine
+                  ? "Шууд удирдлага"
+                  : meeting.initiator === "employee"
+                    ? "Танд хүсэлт илгээсэн ажилтан"
+                    : "Таны урьсан ажилтан"}
+              </p>
+            )}
           </div>
         </div>
         <div className="detail-info">
@@ -1571,7 +1562,7 @@ function MeetingDetails({
         </div>
         {meeting.note && (
           <div className="detail-note">
-            <small>ЗӨВХӨН ОРОЛЦОГЧДОД ХАРАГДАНА</small>
+            <small>ДЭЛГЭРЭНГҮЙ</small>
             <p>“{meeting.note}”</p>
           </div>
         )}
